@@ -174,6 +174,7 @@ MAKE/POST_CELL_GEN/run.sh \
 - `MAKE/POST_CELL_GEN/inputs` is intentionally local. The required tech/model files are not committed to this repository.
 - The fast default liberty mode is intended for quick validation and rough synthesis/timing use, not signoff accuracy.
 - Post-layout PEX characterization may still require extra convergence tuning on some cells.
+- Multi-output cells are supported by the current fast Liberty flow. A validated example is `FAx1_ASAP7_75t_R`, which produces a Liberty cell with both `CON` and `SN` outputs.
 
 
 
