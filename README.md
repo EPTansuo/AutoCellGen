@@ -16,88 +16,50 @@ Baek, Kyeonghyeon, and Taewhan Kim. "Simultaneous transistor folding and placeme
 
 ## Build
 
-Csyn-fp is built with CMake.
-
-
+The current build flow is based on `MAKE/PLACE_ROUTE/csyn_fp`.
 
 ### Prerequisites
 
-The build dependency versions are shown below. Other versions may work, but these are the versions used for development.
+The flow expects a recent C++ toolchain, Java, Conda, and the Cadence tools used by the optional Liberty flow:
 
 ```
-Ubuntu   20.04
-cmake    3.27.7        
-gcc      11.4.0
+cmake    3.22+
+gcc/g++  8.4+
+Z3       4.8.11
+java     1.8+
+conda    ~/miniconda3
 ```
 
+Environment activation is machine-specific and must be configured locally by the user. A typical local `env.sh` may activate Conda and export compiler and license variables, but this file is intentionally not tracked by git.
 
+The Liberty flow also depends on local technology/model inputs that are not tracked by git. Populate these paths yourself as needed:
 
-### Z3 SMT solver
-
-We use Z3 SMT solver to execute in-cell route process.
-
-The github repository of Z3 SMT solver : https://github.com/Z3Prover/z3
-
-The version we used are shown below.
-
-```
-Z3		4.8.11.0
+```text
+./MAKE/POST_CELL_GEN/inputs/PROBE.pm
+./MAKE/POST_CELL_GEN/inputs/lvs.pvl
+./MAKE/POST_CELL_GEN/inputs/stdqrc
 ```
 
-To achieve the correct results, **you must use the exact version as we provided**. Other versions may cause errors. 
+### One-time setup
 
+After preparing your local environment, run these commands from the repository root. `source ./env.sh` is only an example; any equivalent environment activation is fine.
 
-
-### Installing with CMake
-
-Use the following commands to checkout the git repository and build the Csyn-fp library and executable.
-
-**git clone & move to default directory**
-
-```
-git clone [TODO : create github repository]
-cd AutoCellGen
-cd MAKE
-cd PLACE
-cd csyn_fp
+```bash
+source ./env.sh
+git submodule update --init --recursive
+cd MAKE/PLACE_ROUTE/csyn_fp/z3
+cmake -S . -B build
+cmake --build build -j4
+cd ..
+cmake -S . -B build
+cmake --build build -j4
 ```
 
+After that, the placement executable is available at:
 
-
-**build Z3 solver library**
-
-We have included the Z3 solver library we used in the path below.
-
+```text
+./MAKE/PLACE_ROUTE/csyn_fp/build/placement
 ```
-./AutoCellGen/MAKE/PLACE/csyn_fp/z3
-```
-
-You can directly generate the Z3 executable file using the command below.
-
-```
-cd z3
-mkdir build
-cmake ..
-make
-```
-
-It is also available for download & build from the Z3 solver GitHub repository mentioned above.
-
-If you download z3 from GitHub, you should place it in the `./AutoCellGen/MAKE/PLACE/csyn_fp` directory.
-
-
-
-**build Csyn-fp library**
-
-```
-cd ../..
-mkdir build
-cd build
-cmake ..
-make
-```
-
-If you make changes to `CMakeLists.txt` you may need to clean out existing CMake cached variable values by deleting all of the files in the build directory.
 
 
 
@@ -105,95 +67,113 @@ If you make changes to `CMakeLists.txt` you may need to clean out existing CMake
 
 ## Run
 
-### Placement setups
+### Placement setup
 
-To generate placements, input parameter setups are required.
+Placement and routing options are controlled by:
 
-Input parameters can be modified in the file noted below.
-
-```
-./AutoCellGen/DATA/input/placement_file.style  
+```text
+./DATA/input/placement_file.style
 ```
 
-Each input parameter is explained by comments. Please modify the input parameters according to the comments.
+Each option is documented inline in that file.
 
+### Generate placement, route, and GDS
 
+After activating your locally configured environment. `source ./env.sh` is only an example; any equivalent environment activation is fine.
 
-### Generating transistor placement & Execute in-cell route
-
-Use the following commands to execute csyn-fp to  generate transistor placement & execute in-cell route
-
-```
-cd AutoCellGen
-cd MAKE
-cd PLACE
-./1.run_csyn_fp ${netlist_file}
+```bash
+source ./env.sh
+cd MAKE/PLACE_ROUTE
+./1.run_csyn_fp /path/to/your_netlist.cdl
 ```
 
+You can also use the provided ASAP7 example:
 
-
-An example of a netlist file is provided below. You can use this file as an input example.
-
-Netlist file we provided is from https://github.com/The-OpenROAD-Project/asap7
-
-```
-ASAP7 7.5-track standard cell library netlist : ./AutoCellGen/DATA/input/asap7sc7p5t.sp
+```bash
+./1.run_csyn_fp ../../DATA/input/asap7sc7p5t.sp
 ```
 
+Outputs are written to:
 
-
-Output files are saved in the folder noted below.
-
-**placement file**
-
+```text
+./MAKE/PLACE_ROUTE/output/placement
+./MAKE/PLACE_ROUTE/output/route
+./MAKE/PLACE_ROUTE/output/gds
+./MAKE/PLACE_ROUTE/output/IOnet
+./MAKE/PLACE_ROUTE/output/summary.txt
 ```
-./AutoCellGen/MAKE/PLACE/output/placement
-```
 
+The placement text format is:
 
-
-**placement file Description**
-
-The placement results are listed sequentially from the left column.
-
-Here is the output file format.
-
-```
+```text
 -------- Solution 0 --------
 [Column 1]
 NMOS : ${NMOS_name}(${fin_number}) [${source_net} ${gate_net} ${drain_net}], PMOS : ${PMOS_name}(${fin_number}) [${source_net} ${gate_net} ${drain_net}]
 ...
-
 ```
 
-The placement file output example is represented below.
+### Generate Liberty
 
-```
--------- Solution 0 --------
-[Column 1]
-NMOS : MMN0(2) [EN SE VSS], PMOS : MMP(2) [VDD SE net22]
-...
+The repository now includes a minimal `PostCellGen` flow under:
 
+```text
+./MAKE/POST_CELL_GEN
 ```
 
+It supports two practical modes:
 
+1. Fast schematic-based characterization.
+2. Full post-layout characterization with `LVS -> PEX -> Quantus -> Liberate`.
 
-**IO net file**
+The current default behavior is the fast path:
 
+- DRC disabled
+- LVS skipped
+- Pegasus PEX skipped
+- Quantus skipped
+- characterization uses schematic/CDL
+- small 2x2 characterization tables for quick smoke runs
+
+Run it like this:
+
+```bash
+source ./env.sh
+MAKE/POST_CELL_GEN/run.sh \
+  --cell A2O1A1Ixp33_ASAP7_75t_R_w6_0 \
+  --gds ./MAKE/PLACE_ROUTE/output/gds/A2O1A1Ixp33_ASAP7_75t_R_w6_0.gds \
+  --cdl ./DATA/input/smoke_A2O1A1Ixp33.sp \
+  --lib-name mylib
 ```
-./AutoCellGen/MAKE/PLACE/output/IOnet
+
+The generated liberty is written to:
+
+```text
+./MAKE/POST_CELL_GEN/results/lib/${lib_name}_${process}_${vdd}_${temp}_nldm.lib
 ```
 
+To enable the more complete post-layout path, explicitly override the defaults:
 
-
-**GDS file**
-
+```bash
+MAKE/POST_CELL_GEN/run.sh \
+  --cell ... \
+  --gds ... \
+  --cdl ... \
+  --lib-name ... \
+  --skip-lvs 0 \
+  --skip-pvspex 0 \
+  --skip-qtspex 0 \
+  --char-from pex \
+  --smoke-char 0
 ```
-./AutoCellGen/MAKE/PLACE/output/gds
-```
 
-Note that SNUCell1.0 may produce some cells with design rule violation. In such case, a manual modification is required.
-A next version will fix this problem.
+### Notes
+
+- `env.sh` is expected to be a local, user-maintained file. It is not committed to this repository.
+- `source ./env.sh` in the examples can be replaced with any equivalent environment activation method.
+- Your local environment must provide the Cadence tool licenses required by `pegasus`, `quantus`, and `liberate`.
+- `MAKE/POST_CELL_GEN/inputs` is intentionally local. The required tech/model files are not committed to this repository.
+- The fast default liberty mode is intended for quick validation and rough synthesis/timing use, not signoff accuracy.
+- Post-layout PEX characterization may still require extra convergence tuning on some cells.
 
 
 

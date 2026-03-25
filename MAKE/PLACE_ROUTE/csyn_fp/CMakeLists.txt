@@ -9,18 +9,33 @@ message(STATUS ${PROJECT_SOURCE_DIR})
 # Find includes in the build directories
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-# Set CC and CXX
-execute_process(COMMAND which gcc OUTPUT_VARIABLE CC OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND which g++ OUTPUT_VARIABLE CXX OUTPUT_STRIP_TRAILING_WHITESPACE)
+# Set CC and CXX. Prefer the activated environment's toolchain.
+if(DEFINED ENV{CC} AND NOT "$ENV{CC}" STREQUAL "")
+  set(CMAKE_C_COMPILER "$ENV{CC}")
+else()
+  execute_process(COMMAND which gcc OUTPUT_VARIABLE CC OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(CMAKE_C_COMPILER ${CC})
+endif()
 
-set(CMAKE_C_COMPILER ${CC})
-set(CMAKE_CXX_COMPILER ${CXX})
+if(DEFINED ENV{CXX} AND NOT "$ENV{CXX}" STREQUAL "")
+  set(CMAKE_CXX_COMPILER "$ENV{CXX}")
+else()
+  execute_process(COMMAND which g++ OUTPUT_VARIABLE CXX OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(CMAKE_CXX_COMPILER ${CXX})
+endif()
 
 # Project's name
 project(transistorplacement)
 
 # Z3 SMT prover - Please modify it to suit your environment
-set ( Z3_DIR ./z3/build )
+if(NOT DEFINED Z3_DIR)
+  set(Z3_DIR "${CMAKE_CURRENT_SOURCE_DIR}/z3/build")
+endif()
+if(EXISTS "${Z3_DIR}/cmake/Z3Config.cmake")
+  set(Z3_CONFIG_DIR "${Z3_DIR}/cmake")
+else()
+  set(Z3_CONFIG_DIR "${Z3_DIR}")
+endif()
 find_package(Z3
   REQUIRED
   CONFIG
@@ -30,6 +45,7 @@ find_package(Z3
   # this project. When making your own project you probably shouldn't
   # use this option.
   NO_DEFAULT_PATH
+  PATHS "${Z3_CONFIG_DIR}"
 )
 message(STATUS "Z3_FOUND: ${Z3_FOUND}")
 message(STATUS "Found Z3 ${Z3_VERSION_STRING}")
@@ -70,6 +86,9 @@ add_executable(placement ${SRC_FILES})
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 target_link_libraries(placement PRIVATE Threads::Threads)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+  target_link_libraries(placement PRIVATE stdc++fs)
+endif()
 
 
 # Linker Flags

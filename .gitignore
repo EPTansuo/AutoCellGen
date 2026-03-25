@@ -1,0 +1,11 @@
+env.sh
+DATA/input/smoke_*.sp
+MAKE/PLACE_ROUTE/csyn_fp/build/
+MAKE/PLACE_ROUTE/output/
+MAKE/POST_CELL_GEN/inputs/PROBE.pm
+MAKE/POST_CELL_GEN/inputs/lvs.pvl
+MAKE/POST_CELL_GEN/inputs/techlib.defs
+MAKE/POST_CELL_GEN/inputs/stdqrc
+MAKE/POST_CELL_GEN/results/
+MAKE/POST_CELL_GEN/logs/
+MAKE/POST_CELL_GEN/done/

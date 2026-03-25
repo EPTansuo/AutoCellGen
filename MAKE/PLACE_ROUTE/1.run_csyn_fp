@@ -1,27 +1,42 @@
-#!/bin/bash 
+#!/bin/bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+
+if [[ -f "${repo_root}/env.sh" ]]; then
+    # Load the remote build/runtime environment when available.
+    # shellcheck disable=SC1091
+    source "${repo_root}/env.sh"
+fi
+
 mode=build/placement
 
 ##########################################
 ###### Change input parameters here ######
 ##########################################
-input=../../DATA/input 
+input="${repo_root}/DATA/input"
 
 #cdl
 ######### asap7sc7p5t netlist ############
 #cdl=$input/asap7sc6t.sp
 ########## asap7sc6t netlist #############
 #cdl=$input/asap7sc6t.sp
-cdl=$1
+if [[ $# -ge 1 ]]; then
+    cdl="$1"
+else
+    cdl="${input}/asap7sc7p5t.sp"
+fi
 
 #Placement configuration
-dr=$input/placement_file.style  
+dr="${input}/placement_file.style"
 #########################################
 
-out=./output/placement  
-mkdir -p $out 
+out="${script_dir}/output/placement"
+mkdir -p "${out}"
 
-PlacementDir=./csyn_fp  
+PlacementDir="${script_dir}/csyn_fp"
 
-$PlacementDir/$mode -i $cdl -d $dr -o $out 
+"${PlacementDir}/${mode}" -i "${cdl}" -d "${dr}" -o "${out}"
 
-mv $out/summary.txt $out/../
+mv "${out}/summary.txt" "${out}/../"
