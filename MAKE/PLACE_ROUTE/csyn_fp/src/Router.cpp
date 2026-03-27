@@ -77,6 +77,7 @@ void Router::initialize_grid() {
 }
 
 void Router::generate_pin_map() {
+	routed_net_order.clear();
 
 	// connect the same net of gate polies by LIG
 	// Generate pin map per pin to be connected by M1, M2
@@ -365,13 +366,14 @@ void Router::generate_pin_map() {
 					}
 					float_point_list.push_back(float_points);
 				}
-			}
+				}
 
-			pin_map[net] = pin_map_of_cur_net;
-			floating_pins[net] = float_point_list;
-		}
-		else if (num_pins == 1 && std::find(cell.IOnets.begin(), cell.IOnets.end(), net) != cell.IOnets.end()) {  // IOpin -> connected gates
-			// Allocate memory for pin map and initialize it
+				pin_map[net] = pin_map_of_cur_net;
+				floating_pins[net] = float_point_list;
+				routed_net_order.push_back(net);
+			}
+			else if (num_pins == 1 && std::find(cell.IOnets.begin(), cell.IOnets.end(), net) != cell.IOnets.end()) {  // IOpin -> connected gates
+				// Allocate memory for pin map and initialize it
 			bool** pin_map_of_cur_net = new bool*[row_size];
 			for (int j = 0; j < row_size; j++) {
 				pin_map_of_cur_net[j] = new bool[col_size];
@@ -445,36 +447,44 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 	metal_dir.push_back(M2);
 	//metal_dir.push_back(M3);
 
+	auto is_pmos_track = [&](int y) {
+		return y == 0 || y == 1;
+	};
+	auto is_nmos_track = [&](int y) {
+		return y == track_num - 2 || y == track_num - 1;
+	};
+
 
 	auto idx = [&](int x, int y, int z, int n_idx) {
 		return n_idx * layer_num * track_num * col_size + z * track_num * col_size + y * col_size + x;
 	};
 
 	// generate grid (metal_grid)
-	for (auto & iter : pin_map) {
+	for (int n_idx = 0; n_idx < routed_net_order.size(); n_idx++) {
+		const auto& net_name = routed_net_order[n_idx];
 		for (int z = 0; z < layer_num; z++) {
 			for (int y = 0; y < track_num; y++) {
 				for (int x = 0; x < col_size; x++) {
-					std::string metal_name = iter.first + "_(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string metal_name = net_name + "_(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					
 					metal_grid.push_back(c.int_const(metal_name.c_str()));
-					opt.add(metal_grid[idx(x, y, z, num_net_to_connect)] >= 0 && metal_grid[idx(x, y, z, num_net_to_connect)] <= 1);
+					opt.add(metal_grid[idx(x, y, z, n_idx)] >= 0 && metal_grid[idx(x, y, z, n_idx)] <= 1);
 
 				}
 			}
 		}
-		num_net_to_connect++;
 	}	
+	num_net_to_connect = routed_net_order.size();
 	// hor_grid
 	auto h_idx = [&](int x, int y, int z, int n_idx) {
 		return n_idx * layer_num * track_num * (col_size - 1) + z * track_num * (col_size - 1) + y * (col_size - 1) + x;
 	};
 	int n = 0;
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num; z++) {
 			for (int y = 0; y < track_num; y++) {
 				for (int x = 0; x < col_size - 1; x++) {
-					std::string hor_name = iter.first + "_h(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string hor_name = net_name + "_h(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					hor_grid.push_back(c.int_const(hor_name.c_str()));
 
 					if (metal_dir[z] == routing_direction::HOR || metal_dir[z] == routing_direction::BOTH) {
@@ -495,11 +505,11 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 		return n_idx * layer_num * (track_num - 1) * col_size + z * (track_num - 1) * col_size + y * col_size + x;
 	};
 	n = 0;
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num; z++) {
 			for (int y = 0; y < track_num - 1; y++) {
 				for (int x = 0; x < col_size; x++) {
-					std::string ver_name = iter.first + "_v(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string ver_name = net_name + "_v(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					ver_grid.push_back(c.int_const(ver_name.c_str()));
 
 					if (metal_dir[z] == routing_direction::VER || metal_dir[z] == routing_direction::BOTH) {
@@ -518,11 +528,11 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 		return n_idx * (layer_num - 1) * track_num * col_size + z * track_num * col_size + y * col_size + x;
 	};
 	n = 0;
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num - 1; z++) {
 			for (int y = 0; y < track_num; y++) {
 				for (int x = 0; x < col_size; x++) {
-					std::string via_name = iter.first + "_i(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string via_name = net_name + "_i(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					via_grid.push_back(c.int_const(via_name.c_str()));
 
 					opt.add(via_grid[i_idx(x, y, z, n)] >= 0 && via_grid[i_idx(x, y, z, n)] <= 1);
@@ -587,9 +597,8 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 
 	// 3. Connectivity constraints
 	int n_idx = 0;
-	for (auto& iter : floating_pins) {
-		auto pin_name = iter.first;
-		auto& floating_pin_list = iter.second;
+	for (const auto& pin_name : routed_net_order) {
+		auto& floating_pin_list = floating_pins[pin_name];
 
 		if (floating_pin_list.size() == 2) {
 			auto& source_pin = floating_pin_list[0];
@@ -627,14 +636,14 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 			for (auto& source_point : source_pin) {
 				if (source_point.x < lx) lx = source_point.x;
 				if (source_point.x > rx) rx = source_point.x;
-				if (!(source_point.y == 0 || source_point.y == 1)) source_all_pmos = false;
-				if (!(source_point.y == 5 || source_point.y == 6)) source_all_nmos = false;
+				if (!is_pmos_track(source_point.y)) source_all_pmos = false;
+				if (!is_nmos_track(source_point.y)) source_all_nmos = false;
 			}
 			for (auto& dest_point : dest_pin) {
 				if (dest_point.x < lx) lx = dest_point.x;
 				if (dest_point.x > rx) rx = dest_point.x;
-				if (!(dest_point.y == 0 || dest_point.y == 1)) dest_all_pmos = false;
-				if (!(dest_point.y == 5 || dest_point.y == 6)) dest_all_nmos = false;
+				if (!is_pmos_track(dest_point.y)) dest_all_pmos = false;
+				if (!is_nmos_track(dest_point.y)) dest_all_nmos = false;
 			}
 
 			if (source_all_nmos && dest_all_nmos) { // both in NMOS
@@ -643,7 +652,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 				for (int z = 0; z < layer_num; z++) {
 					for (int y = 0; y < track_num; y++) {
 						for (int x = 0; x < col_size - 1; x++) {
-							if ((x >= lx && x <= rx - 1) && (y >= 5 && y <= 6)) continue;
+							if ((x >= lx && x <= rx - 1) && is_nmos_track(y)) continue;
 							opt.add(hor_grid[h_idx(x, y, z, n_idx)] == 0);
 						}
 					}
@@ -652,7 +661,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 				for (int z = 0; z < layer_num; z++) {
 					for (int y = 0; y < track_num - 1; y++) {
 						for (int x = 0; x < col_size; x++) {
-							if ((x >= lx && x <= rx) && (y == 5)) continue;
+							if ((x >= lx && x <= rx) && y == track_num - 2) continue;
 							opt.add(ver_grid[v_idx(x, y, z, n_idx)] == 0);
 						}
 					}
@@ -661,7 +670,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 				for (int z = 0; z < layer_num - 1; z++) {
 					for (int y = 0; y < track_num; y++) {
 						for (int x = 0; x < col_size; x++) {
-							if ((x >= lx && x <= rx) && (y >= 5 && y <= 6)) continue;
+							if ((x >= lx && x <= rx) && is_nmos_track(y)) continue;
 							opt.add(via_grid[i_idx(x, y, z, n_idx)] == 0);
 						}
 					}
@@ -924,14 +933,14 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 				for (auto& source_point : source_pin) {
 					if (source_point.x < lx) lx = source_point.x;
 					if (source_point.x > rx) rx = source_point.x;
-					if (!(source_point.y == 0 || source_point.y == 1)) source_all_pmos = false;
-					if (!(source_point.y == 5 || source_point.y == 6)) source_all_nmos = false;
+					if (!is_pmos_track(source_point.y)) source_all_pmos = false;
+					if (!is_nmos_track(source_point.y)) source_all_nmos = false;
 				}
 				for (auto& dest_point : dest_pin) {
 					if (dest_point.x < lx) lx = dest_point.x;
 					if (dest_point.x > rx) rx = dest_point.x;
-					if (!(dest_point.y == 0 || dest_point.y == 1)) dest_all_pmos = false;
-					if (!(dest_point.y == 5 || dest_point.y == 6)) dest_all_nmos = false;
+					if (!is_pmos_track(dest_point.y)) dest_all_pmos = false;
+					if (!is_nmos_track(dest_point.y)) dest_all_nmos = false;
 				}
 
 				if (source_all_nmos && dest_all_nmos) { // both in NMOS
@@ -940,7 +949,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 					for (int z = 0; z < layer_num; z++) {
 						for (int y = 0; y < track_num; y++) {
 							for (int x = 0; x < col_size - 1; x++) {
-								if ((x >= lx && x <= rx - 1) && (y >= 5 && y <= 6)) continue;
+								if ((x >= lx && x <= rx - 1) && is_nmos_track(y)) continue;
 								opt.add(multi_hor_grid[m_h_idx(x, y, z, d)] == 0);
 							}
 						}
@@ -949,7 +958,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 					for (int z = 0; z < layer_num; z++) {
 						for (int y = 0; y < track_num - 1; y++) {
 							for (int x = 0; x < col_size; x++) {
-								if ((x >= lx && x <= rx) && (y == 5)) continue;
+								if ((x >= lx && x <= rx) && y == track_num - 2) continue;
 								opt.add(multi_ver_grid[m_v_idx(x, y, z, d)] == 0);
 							}
 						}
@@ -958,7 +967,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 					for (int z = 0; z < layer_num - 1; z++) {
 						for (int y = 0; y < track_num; y++) {
 							for (int x = 0; x < col_size; x++) {
-								if ((x >= lx && x <= rx) && (y >= 5 && y <= 6)) continue;
+								if ((x >= lx && x <= rx) && is_nmos_track(y)) continue;
 								opt.add(multi_via_grid[m_i_idx(x, y, z, d)] == 0);
 							}
 						}
@@ -1268,13 +1277,14 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 					cur_ver_exist = cur_ver_exist || ver_grid[v_idx(x, y, z, n)] == 1;
 
 					if (y > 0) top_ver_exist = top_ver_exist || (ver_grid[v_idx(x, y - 1, z, n)] == 1);
-					if (y < row_size - 1) bot_ver_exist = bot_ver_exist || (ver_grid[v_idx(x, y + 1, z, n)] == 1);
+					// ver_grid is indexed on [0, track_num - 2].
+					if (y + 1 < track_num - 1) bot_ver_exist = bot_ver_exist || (ver_grid[v_idx(x, y + 1, z, n)] == 1);
 
 					if (y > 0) {
 						if (x > 0) top_hor_exist = top_hor_exist || (hor_grid[h_idx(x - 1, y - 1, z, n)] == 1);
 						if (x < col_size - 1) top_hor_exist = top_hor_exist || (hor_grid[h_idx(x, y - 1, z, n)] == 1);
 					}
-					if (y < row_size - 2) {
+					if (y + 2 < track_num) {
 						if (x > 0) bot_hor_exist = bot_hor_exist || (hor_grid[h_idx(x - 1, y + 2, z, n)] == 1);
 						if (x < col_size - 1) bot_hor_exist = bot_hor_exist || (hor_grid[h_idx(x, y + 2, z, n)] == 1);				
 					}
@@ -1282,7 +1292,7 @@ void Router::add_detailed_routing_formulation(z3::context & c, z3::optimize & op
 					if (x > 0) up_hor_exist = up_hor_exist || (hor_grid[h_idx(x - 1, y, z, n)] == 1);
 					if (x < col_size - 1) up_hor_exist = up_hor_exist || (hor_grid[h_idx(x, y, z, n)] == 1);
 
-					if (y < row_size - 1) {
+					if (y + 1 < track_num) {
 						if (x > 0) down_hor_exist = down_hor_exist || (hor_grid[h_idx(x - 1, y + 1, z, n)] == 1);
 						if (x < col_size - 1) down_hor_exist = down_hor_exist || (hor_grid[h_idx(x, y + 1, z, n)] == 1);
 					}
@@ -1686,29 +1696,29 @@ void Router::gather_result(z3::context &c, z3::optimize &opt) {
 		return n_idx * layer_num * track_num * col_size + z * track_num * col_size + y * col_size + x;
 	};
 
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num; z++) {
 			for (int y = 0; y < track_num; y++) {
 				for (int x = 0; x < col_size; x++) {
-					std::string metal_name = iter.first + "_(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string metal_name = net_name + "_(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					
 					metal_grid.push_back(c.int_const(metal_name.c_str()));
 				}
 			}
 		}
-		num_net_to_connect++;
 	}	
+	num_net_to_connect = routed_net_order.size();
 
 	// hor_grid
 	auto h_idx = [&](int x, int y, int z, int n_idx) {
 		return n_idx * layer_num * track_num * (col_size - 1) + z * track_num * (col_size - 1) + y * (col_size - 1) + x;
 	};
 	int n = 0;
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num; z++) {
 			for (int y = 0; y < track_num; y++) {
 				for (int x = 0; x < col_size - 1; x++) {
-					std::string hor_name = iter.first + "_h(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string hor_name = net_name + "_h(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					hor_grid.push_back(c.int_const(hor_name.c_str()));
 				}
 			}
@@ -1721,11 +1731,11 @@ void Router::gather_result(z3::context &c, z3::optimize &opt) {
 		return n_idx * layer_num * (track_num - 1) * col_size + z * (track_num - 1) * col_size + y * col_size + x;
 	};
 	n = 0;
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num; z++) {
 			for (int y = 0; y < track_num - 1; y++) {
 				for (int x = 0; x < col_size; x++) {
-					std::string ver_name = iter.first + "_v(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string ver_name = net_name + "_v(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					ver_grid.push_back(c.int_const(ver_name.c_str()));
 				}
 			}
@@ -1738,11 +1748,11 @@ void Router::gather_result(z3::context &c, z3::optimize &opt) {
 		return n_idx * (layer_num - 1) * track_num * col_size + z * track_num * col_size + y * col_size + x;
 	};
 	n = 0;
-	for (auto & iter : pin_map) {
+	for (const auto& net_name : routed_net_order) {
 		for (int z = 0; z < layer_num - 1; z++) {
 			for (int y = 0; y < track_num; y++) {
 				for (int x = 0; x < col_size; x++) {
-					std::string via_name = iter.first + "_i(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
+					std::string via_name = net_name + "_i(" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")";
 					via_grid.push_back(c.int_const(via_name.c_str()));
 
 				}
@@ -1753,13 +1763,12 @@ void Router::gather_result(z3::context &c, z3::optimize &opt) {
 	routing_result["overall"] = std::make_shared<RoutingResult>(num_layer, row_size, col_size, false);
 		
 	int n_idx = 0;
-	for (auto & iter : pin_map) {
-		std::string net_name = iter.first;
+	for (const auto& net_name : routed_net_order) {
 
 		routing_result[net_name] = std::make_shared<RoutingResult>(num_layer, row_size, col_size, false);
 
 		// Parse V0 result
-		auto& fp_list = floating_pins[iter.first];
+		auto& fp_list = floating_pins[net_name];
 		int n_pin = fp_list.size();
 
 		for (int d = 0; d < n_pin - 1; d++) {
@@ -1767,7 +1776,7 @@ void Router::gather_result(z3::context &c, z3::optimize &opt) {
 			auto& dest_pin = fp_list[d + 1];
 
 			for (auto source_point : source_pin) {
-				std::string source_name = iter.first + "_source_" + std::to_string(d) + "_(" + std::to_string(source_point.x) + ", " + std::to_string(source_point.y) + ")";
+				std::string source_name = net_name + "_source_" + std::to_string(d) + "_(" + std::to_string(source_point.x) + ", " + std::to_string(source_point.y) + ")";
 				//std::cout << source_name << std::endl;
 				z3::expr source_point_exp = c.int_const(source_name.c_str());
 				
@@ -1778,7 +1787,7 @@ void Router::gather_result(z3::context &c, z3::optimize &opt) {
 			}
 
 			for (auto dest_point : dest_pin) {
-				std::string dest_name = iter.first + "_dest_" + std::to_string(d) + "_(" + std::to_string(dest_point.x) + ", " + std::to_string(dest_point.y) + ")";
+				std::string dest_name = net_name + "_dest_" + std::to_string(d) + "_(" + std::to_string(dest_point.x) + ", " + std::to_string(dest_point.y) + ")";
 				//std::cout << dest_name << std::endl;
 				z3::expr dest_pin_exp = c.int_const(dest_name.c_str());
 

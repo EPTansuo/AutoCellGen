@@ -65,6 +65,7 @@ public:
     std::unordered_map<std::string, bool**> pin_map, IO_pin_map;
     std::unordered_map<std::string, std::vector<std::vector<Point>>> floating_pins;
     std::unordered_map<std::string, std::vector<std::vector<Point>>> IO_floating_pins;
+    std::vector<std::string> routed_net_order;
     
     std::unordered_map<std::string, std::shared_ptr<RoutingResult>> routing_result;
 
