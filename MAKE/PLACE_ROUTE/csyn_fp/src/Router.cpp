@@ -2217,6 +2217,7 @@ bool Router::routing(fs::path output_path) {
 
 
 void Router::generate_ascii(std::ofstream &out, std::string cell_name) {
+	using BoundaryPoint = std::tuple<Point, bool, bool, bool, bool>;
 
 	auto draw_boundary = [](std::ofstream &d_out, int layer_num, std::vector<Point> &points) {
 		int n_point = points.size();
@@ -2229,6 +2230,144 @@ void Router::generate_ascii(std::ofstream &out, std::string cell_name) {
 			d_out << " X: " << points[i].x * 4 << ";		 Y: " << points[i].y * 4 << ";" << std::endl;
 		}
 		d_out << "ENDEL;" << std::endl << std::endl;
+	};
+	auto draw_rect = [&](std::ofstream &d_out, int layer_num, int x0, int y0, int x1, int y1) {
+		int lx = std::min(x0, x1);
+		int rx = std::max(x0, x1);
+		int by = std::min(y0, y1);
+		int ty = std::max(y0, y1);
+		std::vector<Point> rect = {
+			Point(by, lx),
+			Point(by, rx),
+			Point(ty, rx),
+			Point(ty, lx),
+			Point(by, lx),
+		};
+		draw_boundary(d_out, layer_num, rect);
+	};
+
+	auto trace_boundary = [](std::vector<BoundaryPoint> boundary_points) {
+		for (int i = 0; i < boundary_points.size(); i++) {
+			for (int j = i + 1; j < boundary_points.size();) {
+				if (std::get<0>(boundary_points[i]) == std::get<0>(boundary_points[j])) {
+					std::get<1>(boundary_points[i]) = std::get<1>(boundary_points[i]) || std::get<1>(boundary_points[j]);
+					std::get<2>(boundary_points[i]) = std::get<2>(boundary_points[i]) || std::get<2>(boundary_points[j]);
+					std::get<3>(boundary_points[i]) = std::get<3>(boundary_points[i]) || std::get<3>(boundary_points[j]);
+					std::get<4>(boundary_points[i]) = std::get<4>(boundary_points[i]) || std::get<4>(boundary_points[j]);
+					boundary_points.erase(boundary_points.begin() + j);
+				}
+				else j++;
+			}
+		}
+
+		if (boundary_points.empty()) return std::vector<Point>{};
+
+		auto find_next = [&](const Point& previous_point, const std::vector<bool>& visited, int direction) {
+			int next_pt_idx = -1;
+			int dist = 99999999;
+			for (int j = 0; j < boundary_points.size(); j++) {
+				auto& next_cand_point = std::get<0>(boundary_points[j]);
+				if (visited[j]) continue;
+				if (direction == 0 && previous_point.x > next_cand_point.x && previous_point.y == next_cand_point.y) {
+					if (dist > std::abs(previous_point.x - next_cand_point.x)) {
+						dist = std::abs(previous_point.x - next_cand_point.x);
+						next_pt_idx = j;
+					}
+				}
+				if (direction == 1 && previous_point.x < next_cand_point.x && previous_point.y == next_cand_point.y) {
+					if (dist > std::abs(previous_point.x - next_cand_point.x)) {
+						dist = std::abs(previous_point.x - next_cand_point.x);
+						next_pt_idx = j;
+					}
+				}
+				if (direction == 2 && previous_point.y < next_cand_point.y && previous_point.x == next_cand_point.x) {
+					if (dist > std::abs(previous_point.y - next_cand_point.y)) {
+						dist = std::abs(previous_point.y - next_cand_point.y);
+						next_pt_idx = j;
+					}
+				}
+				if (direction == 3 && previous_point.y > next_cand_point.y && previous_point.x == next_cand_point.x) {
+					if (dist > std::abs(previous_point.y - next_cand_point.y)) {
+						dist = std::abs(previous_point.y - next_cand_point.y);
+						next_pt_idx = j;
+					}
+				}
+			}
+			return next_pt_idx;
+		};
+
+		auto get_start_directions = [&](int idx) {
+			std::vector<int> dirs;
+			if (std::get<1>(boundary_points[idx])) dirs.push_back(0);
+			if (std::get<2>(boundary_points[idx])) dirs.push_back(1);
+			if (std::get<3>(boundary_points[idx])) dirs.push_back(2);
+			if (std::get<4>(boundary_points[idx])) dirs.push_back(3);
+			return dirs;
+		};
+
+		auto next_direction = [&](int current_direction, int next_pt_idx, int& new_direction) {
+			if (current_direction == 0 || current_direction == 1) {
+				if (std::get<3>(boundary_points[next_pt_idx])) new_direction = 2;
+				else if (std::get<4>(boundary_points[next_pt_idx])) new_direction = 3;
+				else if (std::get<1>(boundary_points[next_pt_idx])) new_direction = 0;
+				else if (std::get<2>(boundary_points[next_pt_idx])) new_direction = 1;
+				else return false;
+			}
+			else if (current_direction == 2 || current_direction == 3) {
+				if (std::get<1>(boundary_points[next_pt_idx])) new_direction = 0;
+				else if (std::get<2>(boundary_points[next_pt_idx])) new_direction = 1;
+				else if (std::get<3>(boundary_points[next_pt_idx])) new_direction = 2;
+				else if (std::get<4>(boundary_points[next_pt_idx])) new_direction = 3;
+				else return false;
+			}
+			else return false;
+			return true;
+		};
+
+		auto attempt_trace = [&](int start_idx, int initial_direction) {
+			std::vector<Point> cir_boundary;
+			cir_boundary.push_back(std::get<0>(boundary_points[start_idx]));
+
+			int to_direction = initial_direction;
+			Point previous_point = std::get<0>(boundary_points[start_idx]);
+			int n_boundary_points = boundary_points.size();
+			std::vector<bool> visited(n_boundary_points, false);
+			visited[start_idx] = true;
+
+			for (int i = 0; i < n_boundary_points - 1; i++) {
+				int next_pt_idx = find_next(previous_point, visited, to_direction);
+				if (next_pt_idx == -1) {
+					for (int dir = 0; dir < 4 && next_pt_idx == -1; dir++) {
+						if (dir == to_direction) continue;
+						next_pt_idx = find_next(previous_point, visited, dir);
+						if (next_pt_idx != -1) to_direction = dir;
+					}
+				}
+				if (next_pt_idx == -1) return std::vector<Point>{};
+
+				cir_boundary.push_back(std::get<0>(boundary_points[next_pt_idx]));
+				visited[next_pt_idx] = true;
+				previous_point = std::get<0>(boundary_points[next_pt_idx]);
+
+				int new_direction = -1;
+				if (!next_direction(to_direction, next_pt_idx, new_direction)) return std::vector<Point>{};
+				to_direction = new_direction;
+			}
+
+			cir_boundary.push_back(std::get<0>(boundary_points[start_idx]));
+			return cir_boundary;
+		};
+
+		for (int start_idx = 0; start_idx < boundary_points.size(); start_idx++) {
+			auto dirs = get_start_directions(start_idx);
+			for (auto dir : dirs) {
+				auto cir_boundary = attempt_trace(start_idx, dir);
+				if (!cir_boundary.empty()) return cir_boundary;
+			}
+		}
+
+		std::cout << "Cannot find next points" << std::endl;
+		exit(0);
 	};
 
 
@@ -3145,393 +3284,25 @@ void Router::generate_ascii(std::ofstream &out, std::string cell_name) {
 				}
 			}
 
-			// draw M1
-			// Find metal component through DFS
-			std::vector<std::vector<bool>> explored;
-			explored.resize(row_size);
-			for (int i = 0; i < row_size; i++) {
-				explored[i].resize(col_size);
-				for (int j = 0; j < col_size; j++) explored[i][j] = false;
-			}
-
-			for (int y = 0; y < row_size; y++) {
-				for (int x = 0; x < col_size; x++) {
-					if (route->metal_grid[0][y][x] == 1 && !explored[y][x]) {
-						
-						std::vector<Point> component_points;
-
-						// Find connected components
-						DFS_Metal(route, component_points, y, x, explored, 0);
-						
-						// Find boundary points
-						std::vector<std::tuple<Point, bool, bool, bool, bool>> boundary_points;
-						for (auto& point : component_points) {
-							// hor, ver both exist or only one direction
-
-							bool left =  (point.x > 0 && route->hor_grid[0][point.y][point.x - 1] == 1) ? true : false; 
-							bool right = (point.x < col_size - 1 && route->hor_grid[0][point.y][point.x] == 1) ? true : false;
-							bool up = (point.y > 0 && route->ver_grid[0][point.y - 1][point.x] == 1) ? true : false;
-							bool down = (point.y < row_size - 1 && route->ver_grid[0][point.y][point.x] == 1) ? true : false;
-
-							int cy = track_y[point.y];
-							int cx = gate_pitch / 2 * (point.x + 1);
-
-							assert(left || right || up || down);
-
-							int hor_dir = 0, ver_dir = 0;
-							if (left) hor_dir++;
-							if (right) hor_dir++;
-							if (up) ver_dir++;
-							if (down) ver_dir++;
-
-							if (!((hor_dir > 0 && ver_dir > 0) || hor_dir + ver_dir == 1)) continue;
-
-							// End point	
-							if (left && !right && !up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2 + m1_v0_ex), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2 + m1_v0_ex), true, false, false, true));
-							}
-							else if (!left && right && !up  && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2 - m1_v0_ex), false, true, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2 - m1_v0_ex), false, true, false, true));
-							}
-							else if (!left && !right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2 - m1_v0_ex, cx - m1_width / 2), false, true, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2 - m1_v0_ex, cx + m1_width / 2), true, false, true, false));
-							}
-							else if (!left && !right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2 + m1_v0_ex, cx - m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2 + m1_v0_ex, cx + m1_width / 2), true, false, false, true));
-							}						
-						
-							// two-direction points
-							else if (left && !right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), true, false, true, false));
-							}
-							else if (!left && right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), false, true, true, false));
-							}
-							else if (left && !right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-							}
-							else if (!left && right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-							}
-
-							// three-direction points
-							else if (left && right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-							}
-							else if (!left && right && up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-							}
-							else if (left && right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-							}
-							else if (left && !right && up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-							}
-
-							// four-direction points
-							else if (left && right && up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-			
-							}
+			// Draw M1 and M2 as overlapping rectangles. This is more robust than
+			// reconstructing a single contour from routed components.
+			for (int layer = 0; layer < 2; layer++) {
+				int gds_layer = (layer == 0) ? static_cast<int>(LAYER::M1) : static_cast<int>(LAYER::M2);
+				for (int y = 0; y < row_size; y++) {
+					for (int x = 0; x < col_size; x++) {
+						int cy = track_y[y];
+						int cx = gate_pitch / 2 * (x + 1);
+						if (route->metal_grid[layer][y][x] == 1) {
+							draw_rect(out, gds_layer, cx - m1_width / 2, cy - m1_width / 2, cx + m1_width / 2, cy + m1_width / 2);
 						}
-
-						// Circulate
-						std::vector<Point> cir_boundary;
-						cir_boundary.push_back(std::get<0>(boundary_points[0]));
-						
-						// Left, Right, Up, Down
-						int to_direction = (std::get<1>(boundary_points[0])) ? 0 : ((std::get<2>(boundary_points[0])) ? 1 : 2);
-
-						Point previous_point = std::get<0>(boundary_points[0]);
-
-						int n_boundary_points = boundary_points.size();
-						std::vector<bool> visited(n_boundary_points, false);
-						
-						for (int i = 0; i < n_boundary_points; i++) {
-							// Find next point index
-
-							int next_pt_idx = -1;
-							int dist = 99999999;
-							for (int j = 0; j < n_boundary_points; j++) {
-								auto& next_cand_point = std::get<0>(boundary_points[j]);
-
-								if (visited[j]) continue;
-								if (to_direction == 0 && previous_point.x > next_cand_point.x && previous_point.y == next_cand_point.y) {
-									if (dist > std::abs(previous_point.x - next_cand_point.x)) {
-										dist = std::abs(previous_point.x - next_cand_point.x);
-										next_pt_idx = j;
-									}									
-								}
-								if (to_direction == 1 && previous_point.x < next_cand_point.x && previous_point.y == next_cand_point.y) {
-									if (dist > std::abs(previous_point.x - next_cand_point.x)) {
-										dist = std::abs(previous_point.x - next_cand_point.x);
-										next_pt_idx = j;
-									}									
-								}
-								if (to_direction == 2 && previous_point.y < next_cand_point.y && previous_point.x == next_cand_point.x) {
-									if (dist > std::abs(previous_point.y - next_cand_point.y)) {
-										dist = std::abs(previous_point.y - next_cand_point.y);
-										next_pt_idx = j;
-									}													
-								}
-								if (to_direction == 3 && previous_point.y > next_cand_point.y && previous_point.x == next_cand_point.x) {
-									if (dist > std::abs(previous_point.y - next_cand_point.y)) {
-										dist = std::abs(previous_point.y - next_cand_point.y);
-										next_pt_idx = j;
-									}													
-								}
-							}
-
-							if (next_pt_idx == -1) {
-								std::cout << "Cannot find next points" << std::endl;
-								exit(0);
-							}
-							cir_boundary.push_back(std::get<0>(boundary_points[next_pt_idx]));
-							visited[next_pt_idx] = true;
-						
-							previous_point = std::get<0>(boundary_points[next_pt_idx]);
-							if (to_direction == 0 || to_direction == 1) {
-								if (std::get<3>(boundary_points[next_pt_idx])) to_direction = 2;
-								else if (std::get<4>(boundary_points[next_pt_idx])) to_direction = 3;
-								else {
-									std::cout << "Direction Error!" << std::endl;
-									exit(0);
-								}
-							}
-							else if (to_direction == 2 || to_direction == 3) {
-								if (std::get<1>(boundary_points[next_pt_idx])) to_direction = 0;
-								else if (std::get<2>(boundary_points[next_pt_idx])) to_direction = 1;
-								else {
-									std::cout << "Direction Error!" << std::endl;
-									exit(0);
-								}
-							}
-							else {
-								std::cout << "Direction Out of bound!" << std::endl;
-								exit(0);
-							}
-						
+						if (x < col_size - 1 && route->hor_grid[layer][y][x] == 1) {
+							int nx = gate_pitch / 2 * (x + 2);
+							draw_rect(out, gds_layer, cx, cy - m1_width / 2, nx, cy + m1_width / 2);
 						}
-
-						// Draw M1
-
-						out << "BOUNDARY;" << std::endl;
-						out << "LAYER " << static_cast<int>(LAYER::M1) << ";" << std::endl;
-						out << "DATATYPE 0;" << std::endl;
-						out << "XY "<< static_cast<int>(cir_boundary.size()) << " ;" << std::endl;
-						for (int i = 0; i < cir_boundary.size(); i++) {
-							out << " X: " << cir_boundary[i].x * 4 << ";		 Y: " << cir_boundary[i].y * 4 << ";" << std::endl;
+						if (y < row_size - 1 && route->ver_grid[layer][y][x] == 1) {
+							int ny = track_y[y + 1];
+							draw_rect(out, gds_layer, cx - m1_width / 2, cy, cx + m1_width / 2, ny);
 						}
-						out << "ENDEL;" << std::endl << std::endl;
-					}
-				}
-			}
-
-			// draw M2
-			// Find metal component through DFS
-			for (int i = 0; i < row_size; i++) {
-				for (int j = 0; j < col_size; j++) explored[i][j] = false;
-			}
-
-			for (int y = 0; y < row_size; y++) {
-				for (int x = 0; x < col_size; x++) {
-					if (route->metal_grid[1][y][x] == 1 && !explored[y][x]) {
-						
-						std::vector<Point> component_points;
-
-						// Find connected components
-						DFS_Metal(route, component_points, y, x, explored, 1);
-						
-						// Find boundary points
-						std::vector<std::tuple<Point, bool, bool, bool, bool>> boundary_points;
-						for (auto& point : component_points) {
-							// hor, ver both exist or only one direction
-
-							bool left =  (point.x > 0 && route->hor_grid[1][point.y][point.x - 1] == 1) ? true : false; 
-							bool right = (point.x < col_size - 1 && route->hor_grid[1][point.y][point.x] == 1) ? true : false;
-							bool up = (point.y > 0 && route->ver_grid[1][point.y - 1][point.x] == 1) ? true : false;
-							bool down = (point.y < row_size - 1 && route->ver_grid[1][point.y][point.x] == 1) ? true : false;
-
-							int cy = track_y[point.y];
-							int cx = gate_pitch / 2 * (point.x + 1);
-
-							assert(left || right || up || down);
-
-							int hor_dir = 0, ver_dir = 0;
-							if (left) hor_dir++;
-							if (right) hor_dir++;
-							if (up) ver_dir++;
-							if (down) ver_dir++;
-
-							if (!((hor_dir > 0 && ver_dir > 0) || hor_dir + ver_dir == 1)) continue;
-
-							// End point	
-							if (left && !right && !up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2 + m1_v0_ex), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2 + m1_v0_ex), true, false, false, true));
-							}
-							else if (!left && right && !up  && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2 - m1_v0_ex), false, true, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2 - m1_v0_ex), false, true, false, true));
-							}
-							else if (!left && !right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2 - m1_v0_ex, cx - m1_width / 2), false, true, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2 - m1_v0_ex, cx + m1_width / 2), true, false, true, false));
-							}
-							else if (!left && !right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2 + m1_v0_ex, cx - m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2 + m1_v0_ex, cx + m1_width / 2), true, false, false, true));
-							}						
-						
-							// two-direction points
-							else if (left && !right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), true, false, true, false));
-							}
-							else if (!left && right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), false, true, true, false));
-							}
-							else if (left && !right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-							}
-							else if (!left && right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-							}
-
-							// three-direction points
-							else if (left && right && up && !down) {
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-							}
-							else if (!left && right && up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-							}
-							else if (left && right && !up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-							}
-							else if (left && !right && up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-							}
-
-							// four-direction points
-							else if (left && right && up && down) {
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx - m1_width / 2), true, false, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx - m1_width / 2), true, false, true, false));
-								boundary_points.push_back(std::make_tuple(Point(cy - m1_width / 2, cx + m1_width / 2), false, true, false, true));
-								boundary_points.push_back(std::make_tuple(Point(cy + m1_width / 2, cx + m1_width / 2), false, true, true, false));
-			
-							}
-						}
-
-						// Circulate
-						std::vector<Point> cir_boundary;
-						cir_boundary.push_back(std::get<0>(boundary_points[0]));
-						
-						// Left, Right, Up, Down
-						int to_direction = (std::get<1>(boundary_points[0])) ? 0 : ((std::get<2>(boundary_points[0])) ? 1 : 2);
-
-						Point previous_point = std::get<0>(boundary_points[0]);
-
-						int n_boundary_points = boundary_points.size();
-						std::vector<bool> visited(n_boundary_points, false);
-						
-						for (int i = 0; i < n_boundary_points; i++) {
-							// Find next point index
-
-							int next_pt_idx = -1;
-							int dist = 99999999;
-							for (int j = 0; j < n_boundary_points; j++) {
-								auto& next_cand_point = std::get<0>(boundary_points[j]);
-
-								if (visited[j]) continue;
-								if (to_direction == 0 && previous_point.x > next_cand_point.x && previous_point.y == next_cand_point.y) {
-									if (dist > std::abs(previous_point.x - next_cand_point.x)) {
-										dist = std::abs(previous_point.x - next_cand_point.x);
-										next_pt_idx = j;
-									}									
-								}
-								if (to_direction == 1 && previous_point.x < next_cand_point.x && previous_point.y == next_cand_point.y) {
-									if (dist > std::abs(previous_point.x - next_cand_point.x)) {
-										dist = std::abs(previous_point.x - next_cand_point.x);
-										next_pt_idx = j;
-									}									
-								}
-								if (to_direction == 2 && previous_point.y < next_cand_point.y && previous_point.x == next_cand_point.x) {
-									if (dist > std::abs(previous_point.y - next_cand_point.y)) {
-										dist = std::abs(previous_point.y - next_cand_point.y);
-										next_pt_idx = j;
-									}													
-								}
-								if (to_direction == 3 && previous_point.y > next_cand_point.y && previous_point.x == next_cand_point.x) {
-									if (dist > std::abs(previous_point.y - next_cand_point.y)) {
-										dist = std::abs(previous_point.y - next_cand_point.y);
-										next_pt_idx = j;
-									}													
-								}
-							}
-
-							if (next_pt_idx == -1) {
-								std::cout << "Cannot find next points" << std::endl;
-								exit(0);
-							}
-							cir_boundary.push_back(std::get<0>(boundary_points[next_pt_idx]));
-							visited[next_pt_idx] = true;
-						
-							previous_point = std::get<0>(boundary_points[next_pt_idx]);
-							if (to_direction == 0 || to_direction == 1) {
-								if (std::get<3>(boundary_points[next_pt_idx])) to_direction = 2;
-								else if (std::get<4>(boundary_points[next_pt_idx])) to_direction = 3;
-								else {
-									std::cout << "Direction Error!" << std::endl;
-									exit(0);
-								}
-							}
-							else if (to_direction == 2 || to_direction == 3) {
-								if (std::get<1>(boundary_points[next_pt_idx])) to_direction = 0;
-								else if (std::get<2>(boundary_points[next_pt_idx])) to_direction = 1;
-								else {
-									std::cout << "Direction Error!" << std::endl;
-									exit(0);
-								}
-							}
-							else {
-								std::cout << "Direction Out of bound!" << std::endl;
-								exit(0);
-							}
-						
-						}
-
-						// Draw M2
-
-						out << "BOUNDARY;" << std::endl;
-						out << "LAYER " << static_cast<int>(LAYER::M2) << ";" << std::endl;
-						out << "DATATYPE 0;" << std::endl;
-						out << "XY "<< static_cast<int>(cir_boundary.size()) << " ;" << std::endl;
-						for (int i = 0; i < cir_boundary.size(); i++) {
-							out << " X: " << cir_boundary[i].x * 4 << ";		 Y: " << cir_boundary[i].y * 4 << ";" << std::endl;
-						}
-						out << "ENDEL;" << std::endl << std::endl;
 					}
 				}
 			}
